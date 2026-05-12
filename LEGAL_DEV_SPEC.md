@@ -412,7 +412,7 @@ snippet=...借款...
 | Phase C | 页面文本导入闭环 | 当前阶段，用文本模拟 OCR 输出 |
 | Phase D | 卷宗搜索 CLI | 当前阶段，和 Phase C 一次跑通 |
 | Phase E | 真实 OCR 接入 | Tesseract / PaddleOCR，本地 OCR |
-| Phase F | 表格和图片证据保存 | 页面截图、图片证据、表格文本化 |
+| Phase F | PDF 页面分析与分流处理 | 按页判定 page_type，text/scanned/mixed/table_like 分流，page_image_path 持久化 |
 | Phase G | 本地 embedding + Hybrid RAG | 本地 embedding + FTS5 / BM25 / 向量融合 |
 | Phase H | LLM 带引用回答 + citation check | 本地 LLM 基于检索片段回答 |
 | Phase I | 案件级 context memory | 当前案件、上一轮查询、选中证据 |
@@ -437,8 +437,8 @@ snippet=...借款...
 | Phase B / B3 - chunks_fts 写入 | [x] | 2026-05-11 | 已实现 chunks_fts 写入 |
 | Phase B / B4 - 关键词检索 | [x] | 2026-05-11 | 已实现关键词检索并返回 file_name/page_no/snippet |
 | Phase C / D - 页面文本导入 + 搜索 CLI 最小闭环 | [x] | 2026-05-12 | pages-dir → ingest_pages → search_legal_chunks CLI 已贯通，tests/legal/test_legal_mvp.py 通过 |
-| Phase E - 真实 OCR 接入 | [x] | 2026-05-12 | RapidOCRProvider 接入；scripts/legal_ingest.py 新增 --image；chunks_fts 切换 trigram + LIKE 回退，中文“借款”/英文“loan”检索均通过 |
-| Phase F - 表格和图片证据保存 | [ ] | - | 待开始 |
+| Phase E - 真实 OCR 接入 | [x] | 2026-05-12 | RapidOCR 图片导入、中文检索、CLI 验证已通过 |
+| Phase F - PDF 页面分析与分流处理 | [x] | 2026-05-12 | 已跑通真实 PDF 页面分析、文本层抽取、中文检索和 page_type 返回 |
 | Phase G - 本地 embedding + Hybrid RAG | [ ] | - | 待开始 |
 | Phase H - LLM 带引用回答 + citation check | [ ] | - | 待开始 |
 | Phase I - 案件级 context memory | [ ] | - | 待开始 |
@@ -449,18 +449,19 @@ snippet=...借款...
 
 ## 10. 当前 Claude 执行边界
 
-Phase C/D 与 Phase E 已完成。下一个允许的实现窗口：
+Phase C/D、Phase E、Phase F（实现已就位，待用户本地 pytest 验收）已落地。下一个允许的实现窗口：
 
 ```text
-Phase F - 表格和图片证据保存
+Phase G - 本地 embedding + Hybrid RAG
 ```
 
 后续阶段未经用户重新授权前，不得提前实现。
 
-历史窗口（已完成）：
+历史窗口（已完成或待验收）：
 
 * Phase C / D — 页面文本导入 + 搜索 CLI 最小闭环
 * Phase E — 真实轻量 OCR (RapidOCR) 图片导入 + CJK trigram / LIKE 回退检索
+* Phase F — PDF 页面分析与分流处理（text / scanned / mixed / table_like）
 
 ---
 

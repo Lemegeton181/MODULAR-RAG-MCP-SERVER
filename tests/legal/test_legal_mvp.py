@@ -87,6 +87,9 @@ def test_pages_dir_ingest_and_search_minimal_loop(tmp_path):
     assert top["file_name"] == "case.pdf"
     assert top["page_no"] == 1
     assert "loan" in top["snippet"].lower()
+    # Phase F: every hit now carries page_type and page_image_path.
+    assert top["page_type"] == "text"
+    assert top["page_image_path"] is None
 
 
 def test_ingest_pages_is_idempotent_per_doc(tmp_path):

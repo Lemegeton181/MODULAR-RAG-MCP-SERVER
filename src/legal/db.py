@@ -1,11 +1,22 @@
 """SQLite schema initialization for the legal retrieval store.
 
-The ``chunks_fts`` virtual table prefers the FTS5 ``trigram`` tokenizer so
-that CJK substring queries (e.g. ``借款`` against ``张三向李四借款五万元``)
-can hit. If the running SQLite build does not ship the trigram tokenizer
-(SQLite < 3.34), the table is created with the default ``unicode61``
-tokenizer instead; :func:`src.legal.fts_store.search_chunks` then falls back
-to a LIKE-based scan for short / CJK queries.
+Tables:
+
+* ``documents`` — one row per ingested file.
+* ``pages`` — one row per page; carries ``page_text`` plus the Phase F
+  fields ``page_type`` (text / scanned / mixed / table_like) and
+  ``page_image_path`` (set when the page was rendered to an image, e.g.
+  for OCR or for mixed-page evidence preview).
+* ``chunks`` — fixed-size character chunks of ``page_text``.
+* ``chunks_fts`` — FTS5 virtual table mirroring ``chunks`` for keyword
+  search. Prefers the ``trigram`` tokenizer so that CJK substring queries
+  (e.g. ``借款`` against ``...借款五万元...``) hit; falls back to the
+  default ``unicode61`` tokenizer when the running SQLite build does not
+  ship trigram. :func:`src.legal.fts_store.search_chunks` then has its
+  own LIKE fallback for queries that even trigram can't match.
+
+:func:`init_legal_db` is idempotent and ALTERs ``pages`` in place to add
+new columns when upgrading from an older Phase C/D / E database.
 """
 from pathlib import Path
 import sqlite3
@@ -21,7 +32,7 @@ _FTS_COLUMNS = (
 
 
 def init_legal_db(db_path: str | Path) -> None:
-    """Initialize SQLite tables for legal document retrieval."""
+    """Initialize / upgrade SQLite tables for legal document retrieval."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -48,10 +59,13 @@ def init_legal_db(db_path: str | Path) -> None:
                 doc_id TEXT NOT NULL,
                 page_no INTEGER NOT NULL,
                 page_text TEXT NOT NULL,
+                page_type TEXT NOT NULL DEFAULT 'text',
+                page_image_path TEXT,
                 FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
             )
             """
         )
+        _ensure_pages_columns(conn)
 
         conn.execute(
             """
@@ -74,8 +88,19 @@ def init_legal_db(db_path: str | Path) -> None:
         conn.close()
 
 
+def _ensure_pages_columns(conn: sqlite3.Connection) -> None:
+    """Add Phase F columns to a pre-existing ``pages`` table if missing."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(pages)").fetchall()}
+    if "page_type" not in existing:
+        conn.execute(
+            "ALTER TABLE pages ADD COLUMN page_type TEXT NOT NULL DEFAULT 'text'"
+        )
+    if "page_image_path" not in existing:
+        conn.execute("ALTER TABLE pages ADD COLUMN page_image_path TEXT")
+
+
 def _create_chunks_fts(conn: sqlite3.Connection) -> None:
-    """Create the chunks_fts virtual table, preferring the trigram tokenizer."""
+    """Create chunks_fts, preferring the trigram tokenizer (with fallback)."""
     try:
         conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "

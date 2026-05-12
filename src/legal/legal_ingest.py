@@ -1,14 +1,17 @@
 """End-to-end legal ingestion into SQLite + FTS5.
 
-Two entry points:
+Three entry points:
 
-* :func:`ingest_pages` — primary MVP path. Accepts an in-memory
-  ``[{"page_no", "text"}, ...]`` list (typically produced by an
-  :class:`~src.legal.ocr.OCRProvider`).
-* :func:`ingest_pdf` — convenience wrapper that extracts pages from a PDF
-  via PyMuPDF and then delegates to :func:`ingest_pages`.
+* :func:`ingest_pages` — primary loader. Accepts an in-memory page list
+  ``[{"page_no", "text", "page_type"?, "page_image_path"?}, ...]`` (typically
+  produced by an :class:`~src.legal.ocr.OCRProvider` or by
+  :func:`~src.legal.pdf_analyzer.analyze_pdf`).
+* :func:`ingest_pdf_with_analysis` — Phase F path. Streams a PDF page-by-page,
+  classifies each page (text / scanned / mixed / table_like), extracts text or
+  runs OCR as needed, and writes everything via :func:`ingest_pages`.
+* :func:`ingest_pdf` — legacy text-layer-only PDF path (Phase E and earlier).
 
-Both writes are idempotent per ``doc_id`` (pages / chunks / chunks_fts rows
+All writes are idempotent per ``doc_id`` (pages / chunks / chunks_fts rows
 for that doc are cleared before the new rows land).
 """
 from __future__ import annotations
@@ -51,17 +54,12 @@ def ingest_pages(
     file_path: Optional[str] = None,
     file_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Ingest pre-extracted page text into the legal SQLite database.
+    """Ingest pre-extracted page rows into the legal SQLite database.
 
-    ``pages`` must be ``[{"page_no": int, "text": str}, ...]``.
+    Each ``pages`` row may carry the optional Phase F fields
+    ``page_type`` (default ``"text"``) and ``page_image_path``.
 
-    Performs:
-        1. ``init_legal_db(db_path)``
-        2. Insert / replace one ``documents`` row
-        3. For each page: insert into ``pages``, then chunk and mirror into
-           ``chunks`` + ``chunks_fts``
-
-    Returns a summary: ``{"doc_id", "file_name", "n_pages", "n_chunks"}``.
+    Returns ``{"doc_id", "file_name", "n_pages", "n_chunks"}``.
     """
     db_path = Path(db_path)
     init_legal_db(db_path)
@@ -89,12 +87,15 @@ def ingest_pages(
         for page in pages:
             page_no = page["page_no"]
             page_text = page.get("text", "") or ""
+            page_type = page.get("page_type") or "text"
+            page_image_path = page.get("page_image_path")
             page_id = f"{doc_id}_p{page_no}"
 
             conn.execute(
                 "INSERT INTO pages "
-                "(page_id, doc_id, page_no, page_text) VALUES (?, ?, ?, ?)",
-                (page_id, doc_id, page_no, page_text),
+                "(page_id, doc_id, page_no, page_text, page_type, page_image_path) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (page_id, doc_id, page_no, page_text, page_type, page_image_path),
             )
 
             for chunk in chunk_page_text(doc_id, page_no, page_text):
@@ -134,7 +135,7 @@ def ingest_pages(
 
 
 def ingest_pdf(db_path: str | Path, pdf_path: str | Path) -> Dict[str, Any]:
-    """Ingest a single PDF: extract per-page text via PyMuPDF, then ingest."""
+    """Legacy: ingest a PDF using only its text layer (no OCR, no analysis)."""
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
@@ -149,3 +150,58 @@ def ingest_pdf(db_path: str | Path, pdf_path: str | Path) -> Dict[str, Any]:
         file_path=str(pdf_path),
         file_hash=file_hash,
     )
+
+
+def ingest_pdf_with_analysis(
+    db_path: str | Path,
+    pdf_path: str | Path,
+    *,
+    image_dir: Optional[str | Path] = None,
+    ocr_provider: Any = None,
+    analyzer: Any = None,
+) -> Dict[str, Any]:
+    """Phase F: stream a PDF, classify each page, and ingest.
+
+    ``analyzer`` is a callable with the same signature as
+    :func:`src.legal.pdf_analyzer.analyze_pdf`. Tests can pass a fake
+    callable to avoid touching real PDFs / RapidOCR.
+
+    ``ocr_provider`` is forwarded to the analyzer; only ``scanned`` pages
+    consume it. If a ``scanned`` page is found and no provider is given,
+    its text remains empty (still indexed; ``page_image_path`` is set).
+    """
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    if analyzer is None:
+        from src.legal.pdf_analyzer import analyze_pdf
+        analyzer = analyze_pdf
+
+    if image_dir is None:
+        image_dir = pdf_path.parent / "_legal_page_images" / pdf_path.stem
+
+    file_hash = _file_sha256(pdf_path)
+    pages = analyzer(
+        pdf_path,
+        image_dir=image_dir,
+        ocr_provider=ocr_provider,
+    )
+
+    summary = ingest_pages(
+        db_path,
+        pdf_path.name,
+        pages,
+        file_path=str(pdf_path),
+        file_hash=file_hash,
+    )
+    summary["page_types"] = _count_page_types(pages)
+    return summary
+
+
+def _count_page_types(pages: Iterable[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for p in pages:
+        t = p.get("page_type") or "text"
+        counts[t] = counts.get(t, 0) + 1
+    return counts

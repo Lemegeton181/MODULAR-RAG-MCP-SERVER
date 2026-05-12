@@ -3,6 +3,13 @@
 
 Usage:
     python scripts/legal_search.py --query "loan" --db data/db/legal.db
+
+Output per hit:
+    file_name=...
+    page_no=...
+    page_type=text|scanned|mixed|table_like
+    snippet=...
+    page_image_path=... (or - if the page was not rendered)
 """
 from __future__ import annotations
 
@@ -42,7 +49,9 @@ def main() -> int:
         print(f"[{i}]")
         print(f"file_name={hit['file_name']}")
         print(f"page_no={hit['page_no']}")
+        print(f"page_type={hit['page_type']}")
         print(f"snippet={hit['snippet']}")
+        print(f"page_image_path={hit.get('page_image_path') or '-'}")
     return 0
 
 

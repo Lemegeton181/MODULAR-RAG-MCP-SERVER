@@ -1,4 +1,10 @@
-"""Keyword search facade over the legal SQLite + FTS5 store."""
+"""Keyword search facade over the legal SQLite + FTS5 store.
+
+:func:`search_legal_chunks` runs the FTS5 / LIKE retrieval defined in
+:mod:`src.legal.fts_store` and then hydrates each hit with the
+Phase F per-page metadata (``page_type`` and ``page_image_path``) by
+joining against the ``pages`` table.
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -13,9 +19,11 @@ def search_legal_chunks(
     query: str,
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
-    """Run an FTS5 keyword query and return ``[{file_name, page_no, snippet}, ...]``.
+    """Run a keyword query and return enriched hits.
 
-    Results are ordered by FTS5 rank (best match first).
+    Each hit dict has: ``file_name``, ``page_no``, ``page_type``,
+    ``snippet``, ``page_image_path``. Ordered by FTS5 rank when MATCH
+    succeeds, otherwise by chunk insertion order.
     """
     db_path = Path(db_path)
     if not db_path.exists():
@@ -23,6 +31,32 @@ def search_legal_chunks(
 
     conn = sqlite3.connect(db_path)
     try:
-        return search_chunks(conn, query, limit=limit)
+        hits = search_chunks(conn, query, limit=limit)
+        return [_hydrate_page_meta(conn, hit) for hit in hits]
     finally:
         conn.close()
+
+
+def _hydrate_page_meta(
+    conn: sqlite3.Connection, hit: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Attach ``page_type`` / ``page_image_path`` from the pages table."""
+    row = conn.execute(
+        """
+        SELECT p.page_type, p.page_image_path
+        FROM pages p
+        JOIN documents d ON d.doc_id = p.doc_id
+        WHERE d.file_name = ? AND p.page_no = ?
+        LIMIT 1
+        """,
+        (hit["file_name"], hit["page_no"]),
+    ).fetchone()
+    page_type = row[0] if row else "text"
+    page_image_path = row[1] if row else None
+    return {
+        "file_name": hit["file_name"],
+        "page_no": hit["page_no"],
+        "page_type": page_type or "text",
+        "snippet": hit["snippet"],
+        "page_image_path": page_image_path,
+    }
