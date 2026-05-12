@@ -23,8 +23,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from src.legal.chunker import chunk_page_text
 from src.legal.db import init_legal_db
+from src.legal.field_extractor import extract_legal_fields_for_doc
 from src.legal.fts_store import index_chunk
 from src.legal.pdf_pages import extract_pdf_pages
+from src.legal.vector_store import delete_doc_vectors, upsert_chunk_vector
 
 
 def _file_sha256(path: Path) -> str:
@@ -53,13 +55,20 @@ def ingest_pages(
     *,
     file_path: Optional[str] = None,
     file_hash: Optional[str] = None,
+    embedder: Any = None,
 ) -> Dict[str, Any]:
     """Ingest pre-extracted page rows into the legal SQLite database.
 
     Each ``pages`` row may carry the optional Phase F fields
     ``page_type`` (default ``"text"``) and ``page_image_path``.
 
-    Returns ``{"doc_id", "file_name", "n_pages", "n_chunks"}``.
+    If ``embedder`` is provided (anything with ``.embed(list[str]) ->
+    list[list[float]]`` and ``.model`` / ``.dim`` attributes), the chunk
+    texts are also embedded and written into ``legal_vectors`` in the same
+    transaction. Existing vectors for the same ``doc_id`` are wiped first
+    so re-ingestion stays idempotent.
+
+    Returns ``{"doc_id", "file_name", "n_pages", "n_chunks", "n_vectors"}``.
     """
     db_path = Path(db_path)
     init_legal_db(db_path)
@@ -80,11 +89,33 @@ def ingest_pages(
         )
 
         conn.execute("DELETE FROM chunks_fts WHERE doc_id = ?", (doc_id,))
+        delete_doc_vectors(conn, doc_id)
         conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
         conn.execute("DELETE FROM pages WHERE doc_id = ?", (doc_id,))
 
-        n_chunks = 0
+        # Materialize chunks first so we can batch-embed all their texts.
+        page_chunks: List[List[Dict[str, Any]]] = []
+        all_chunks: List[Dict[str, Any]] = []
         for page in pages:
+            page_no = page["page_no"]
+            page_text = page.get("text", "") or ""
+            chunks = chunk_page_text(doc_id, page_no, page_text)
+            page_chunks.append(chunks)
+            all_chunks.extend(chunks)
+
+        embeddings: List[List[float]] = []
+        if embedder is not None and all_chunks:
+            embeddings = embedder.embed([c["chunk_text"] for c in all_chunks])
+            if len(embeddings) != len(all_chunks):
+                raise ValueError(
+                    "embedder returned wrong number of vectors: "
+                    f"{len(embeddings)} for {len(all_chunks)} chunks"
+                )
+
+        n_chunks = 0
+        n_vectors = 0
+        emb_iter = iter(embeddings)
+        for page, chunks in zip(pages, page_chunks):
             page_no = page["page_no"]
             page_text = page.get("text", "") or ""
             page_type = page.get("page_type") or "text"
@@ -98,7 +129,7 @@ def ingest_pages(
                 (page_id, doc_id, page_no, page_text, page_type, page_image_path),
             )
 
-            for chunk in chunk_page_text(doc_id, page_no, page_text):
+            for chunk in chunks:
                 conn.execute(
                     "INSERT INTO chunks "
                     "(chunk_id, doc_id, page_no, chunk_text, start_char, end_char) "
@@ -120,21 +151,43 @@ def ingest_pages(
                     page_no=page_no,
                     chunk_text=chunk["chunk_text"],
                 )
+                if embeddings:
+                    vec = next(emb_iter)
+                    upsert_chunk_vector(
+                        conn,
+                        chunk_id=chunk["chunk_id"],
+                        doc_id=doc_id,
+                        page_no=page_no,
+                        embedding=vec,
+                        model=getattr(embedder, "model", "unknown"),
+                    )
+                    n_vectors += 1
                 n_chunks += 1
 
         conn.commit()
     finally:
         conn.close()
 
+    # Phase H 前置：自动抽取 legal_fields（regex + evidence keywords）。
+    # 失败不应阻塞 ingest 主链路 —— 抽不到字段是常态，但运行时错误要可见。
+    n_fields = extract_legal_fields_for_doc(db_path, doc_id)
+
     return {
         "doc_id": doc_id,
         "file_name": file_name,
         "n_pages": len(pages),
         "n_chunks": n_chunks,
+        "n_vectors": n_vectors,
+        "n_fields": n_fields,
     }
 
 
-def ingest_pdf(db_path: str | Path, pdf_path: str | Path) -> Dict[str, Any]:
+def ingest_pdf(
+    db_path: str | Path,
+    pdf_path: str | Path,
+    *,
+    embedder: Any = None,
+) -> Dict[str, Any]:
     """Legacy: ingest a PDF using only its text layer (no OCR, no analysis)."""
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -149,6 +202,7 @@ def ingest_pdf(db_path: str | Path, pdf_path: str | Path) -> Dict[str, Any]:
         pages,
         file_path=str(pdf_path),
         file_hash=file_hash,
+        embedder=embedder,
     )
 
 
@@ -159,6 +213,7 @@ def ingest_pdf_with_analysis(
     image_dir: Optional[str | Path] = None,
     ocr_provider: Any = None,
     analyzer: Any = None,
+    embedder: Any = None,
 ) -> Dict[str, Any]:
     """Phase F: stream a PDF, classify each page, and ingest.
 
@@ -169,6 +224,9 @@ def ingest_pdf_with_analysis(
     ``ocr_provider`` is forwarded to the analyzer; only ``scanned`` pages
     consume it. If a ``scanned`` page is found and no provider is given,
     its text remains empty (still indexed; ``page_image_path`` is set).
+
+    ``embedder`` is forwarded to :func:`ingest_pages`; when given, every
+    chunk is also embedded and persisted in ``legal_vectors``.
     """
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -194,6 +252,7 @@ def ingest_pdf_with_analysis(
         pages,
         file_path=str(pdf_path),
         file_hash=file_hash,
+        embedder=embedder,
     )
     summary["page_types"] = _count_page_types(pages)
     return summary

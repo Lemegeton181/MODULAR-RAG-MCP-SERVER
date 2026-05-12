@@ -4,6 +4,10 @@
 :mod:`src.legal.fts_store` and then hydrates each hit with the
 Phase F per-page metadata (``page_type`` and ``page_image_path``) by
 joining against the ``pages`` table.
+
+Phase G: each hit also carries ``score`` (1/rank) and ``source="fts"``
+so callers can treat the legacy keyword API and the new
+:mod:`src.legal.hybrid_search` API uniformly.
 """
 from __future__ import annotations
 
@@ -22,8 +26,7 @@ def search_legal_chunks(
     """Run a keyword query and return enriched hits.
 
     Each hit dict has: ``file_name``, ``page_no``, ``page_type``,
-    ``snippet``, ``page_image_path``. Ordered by FTS5 rank when MATCH
-    succeeds, otherwise by chunk insertion order.
+    ``snippet``, ``page_image_path``, ``score``, ``source``.
     """
     db_path = Path(db_path)
     if not db_path.exists():
@@ -32,13 +35,16 @@ def search_legal_chunks(
     conn = sqlite3.connect(db_path)
     try:
         hits = search_chunks(conn, query, limit=limit)
-        return [_hydrate_page_meta(conn, hit) for hit in hits]
+        return [
+            _hydrate_page_meta(conn, hit, rank=rank)
+            for rank, hit in enumerate(hits, start=1)
+        ]
     finally:
         conn.close()
 
 
 def _hydrate_page_meta(
-    conn: sqlite3.Connection, hit: Dict[str, Any]
+    conn: sqlite3.Connection, hit: Dict[str, Any], *, rank: int = 1
 ) -> Dict[str, Any]:
     """Attach ``page_type`` / ``page_image_path`` from the pages table."""
     row = conn.execute(
@@ -59,4 +65,6 @@ def _hydrate_page_meta(
         "page_type": page_type or "text",
         "snippet": hit["snippet"],
         "page_image_path": page_image_path,
+        "score": 1.0 / rank,
+        "source": "fts",
     }

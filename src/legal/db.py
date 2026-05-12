@@ -81,6 +81,51 @@ def init_legal_db(db_path: str | Path) -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS legal_vectors (
+                chunk_id TEXT PRIMARY KEY,
+                doc_id TEXT NOT NULL,
+                page_no INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                FOREIGN KEY (doc_id) REFERENCES documents(doc_id),
+                FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_legal_vectors_doc "
+            "ON legal_vectors(doc_id)"
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS legal_fields (
+                field_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                field_value TEXT NOT NULL,
+                field_category TEXT NOT NULL,
+                page_no INTEGER NOT NULL,
+                source_text TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.8,
+                source_type TEXT NOT NULL DEFAULT 'regex',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_legal_fields_doc "
+            "ON legal_fields(doc_id, field_name)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_legal_fields_category "
+            "ON legal_fields(doc_id, field_category)"
+        )
+
         _create_chunks_fts(conn)
 
         conn.commit()

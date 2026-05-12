@@ -90,6 +90,9 @@ def test_pages_dir_ingest_and_search_minimal_loop(tmp_path):
     # Phase F: every hit now carries page_type and page_image_path.
     assert top["page_type"] == "text"
     assert top["page_image_path"] is None
+    # Phase G: every hit also carries score + source.
+    assert top["source"] == "fts"
+    assert top["score"] > 0
 
 
 def test_ingest_pages_is_idempotent_per_doc(tmp_path):

@@ -439,7 +439,8 @@ snippet=...借款...
 | Phase C / D - 页面文本导入 + 搜索 CLI 最小闭环 | [x] | 2026-05-12 | pages-dir → ingest_pages → search_legal_chunks CLI 已贯通，tests/legal/test_legal_mvp.py 通过 |
 | Phase E - 真实 OCR 接入 | [x] | 2026-05-12 | RapidOCR 图片导入、中文检索、CLI 验证已通过 |
 | Phase F - PDF 页面分析与分流处理 | [x] | 2026-05-12 | 已跑通真实 PDF 页面分析、文本层抽取、中文检索和 page_type 返回 |
-| Phase G - 本地 embedding + Hybrid RAG | [ ] | - | 待开始 |
+| Phase G - 本地 embedding + Hybrid RAG | [x] | 2026-05-12 | 已完成本地 embedding 入库、semantic search 和 hybrid RRF 检索验证 |
+| Phase H 前置 - 动态法律字段体系 + 文档字段发现 + 字段优先检索 + Golden Set 评测 | [~] | - | 新增 legal_schema (FIELD_DEFS + EVIDENCE_KEYWORDS)、legal_fields 表、field_extractor (regex + keyword) + 案号 normalize、query_understanding (field_lookup/evidence_search/general_search)、hybrid_search 字段优先 overlay；新增 scripts/legal_reindex_fields.py 与 scripts/legal_eval.py + evaluation/legal_golden_queries.jsonl (15 cases，含 allow_no_hit 标记)。真实卷宗实测：reindex 抽出 31 条字段，"案号是什么" 返回 source=field，legal_eval hit@1=0.733 / hit@3=0.800 / keyword_hit_rate=0.800。等本地 pytest 全绿后置 [x] |
 | Phase H - LLM 带引用回答 + citation check | [ ] | - | 待开始 |
 | Phase I - 案件级 context memory | [ ] | - | 待开始 |
 | Phase J - MCP / Agent 工具化 | [ ] | - | 待开始 |
@@ -449,10 +450,10 @@ snippet=...借款...
 
 ## 10. 当前 Claude 执行边界
 
-Phase C/D、Phase E、Phase F（实现已就位，待用户本地 pytest 验收）已落地。下一个允许的实现窗口：
+Phase C/D、Phase E、Phase F、Phase G 已完成。Phase H 前置（动态法律字段体系 + 文档字段发现 + 字段优先检索 + Golden Set 评测）实现已就位，待用户本地 pytest + 真实卷宗召回率基线建立后置 `[x]`。下一个允许的实现窗口：
 
 ```text
-Phase G - 本地 embedding + Hybrid RAG
+Phase H - LLM 带引用回答 + citation check
 ```
 
 后续阶段未经用户重新授权前，不得提前实现。
@@ -462,6 +463,8 @@ Phase G - 本地 embedding + Hybrid RAG
 * Phase C / D — 页面文本导入 + 搜索 CLI 最小闭环
 * Phase E — 真实轻量 OCR (RapidOCR) 图片导入 + CJK trigram / LIKE 回退检索
 * Phase F — PDF 页面分析与分流处理（text / scanned / mixed / table_like）
+* Phase G — 本地 embedding (SentenceTransformer) + legal_vectors + RRF Hybrid 检索（fts / semantic / hybrid）
+* Phase H 前置 — 动态法律字段体系（FIELD_DEFS + EVIDENCE_KEYWORDS）、文档字段发现 (legal_fields)、字段优先 overlay、Golden Set 评测 (hit@1/hit@3/page_hit_rate/keyword_hit_rate)
 
 ---
 

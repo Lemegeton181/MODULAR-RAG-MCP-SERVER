@@ -6,11 +6,27 @@ returns no rows or raises a syntax error (e.g. CJK query shorter than a
 trigram, or the table was created with a non-trigram tokenizer), the
 function falls back to a LIKE scan over the ``chunks`` table joined with
 ``documents`` and builds the snippet locally.
+
+If BOTH paths come up empty AND the original query looks like a Chinese
+natural-language question (``...是什么 / 是谁 / 是多少 / 在哪`` etc.),
+we strip the question suffix once and retry. This lets the search layer
+serve as a graceful fallback when the field-overlay path is disabled
+(``--no-query-understanding``) — without changing behavior for any query
+that already had a real hit.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import Any, List, Dict
+
+
+# Common Chinese question-tail words. Conservative: only stripped when
+# they sit at the very end of the query and nothing else matched first.
+_QUESTION_SUFFIX_RE = re.compile(
+    r"(是什么|是哪一个|是哪个|是哪些|是多少|是谁|在哪里|在哪儿|在哪|"
+    r"有没有|有哪些|怎么样|如何|为什么|为何|多少|什么)\s*[?？。.！!]*$"
+)
 
 
 def index_chunk(
@@ -48,7 +64,27 @@ def search_chunks(
     if rows:
         return rows
 
-    return _like_fallback(conn, query, limit)
+    rows = _like_fallback(conn, query, limit)
+    if rows:
+        return rows
+
+    stripped = _strip_question_suffix(query)
+    if stripped and stripped != query:
+        rows = _fts_match(conn, stripped, limit)
+        if rows:
+            return rows
+        return _like_fallback(conn, stripped, limit)
+
+    return []
+
+
+def _strip_question_suffix(query: str) -> str:
+    """Remove a trailing Chinese question phrase, if any.
+
+    Only applied as a *retry* by :func:`search_chunks` — never the first
+    attempt — so any query that already matches keeps its exact rank.
+    """
+    return _QUESTION_SUFFIX_RE.sub("", query).strip()
 
 
 def _fts_match(

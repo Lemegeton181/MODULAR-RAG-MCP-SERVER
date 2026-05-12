@@ -1,0 +1,15 @@
+{"id":"q01_case_no","query":"案号是什么","expected_keywords":["案号","号"],"expected_pages":null,"category":"doc_basic","notes":"案号 / 文书编号字段命中"}
+{"id":"q02_doc_type","query":"文书类型是什么","expected_keywords":["裁决书","判决书","调解书","起诉状","答辩状","仲裁申请书","裁定书"],"expected_pages":null,"category":"doc_basic","notes":"任一文书类型关键词命中"}
+{"id":"q03_applicant","query":"申请人是谁","expected_keywords":["申请人"],"expected_pages":null,"category":"party","notes":"申请人字段命中"}
+{"id":"q04_respondent","query":"被申请人是谁","expected_keywords":["被申请人"],"expected_pages":null,"category":"party","notes":"被申请人字段命中"}
+{"id":"q05_legal_rep","query":"法定代表人是谁","expected_keywords":["法定代表人"],"expected_pages":null,"category":"party","notes":"法定代表人字段命中"}
+{"id":"q06_authority","query":"受理机构是哪一个","expected_keywords":["仲裁委员会","人民法院","人民检察院"],"expected_pages":null,"category":"institution","notes":"机构字段任一命中"}
+{"id":"q07_claim","query":"申请事项是什么","expected_keywords":["申请事项","请求","支付","赔偿","二倍工资"],"expected_pages":null,"category":"request","notes":"请求事项 / 诉讼请求字段命中"}
+{"id":"q08_double_salary","query":"二倍工资金额","expected_keywords":["二倍工资","元"],"expected_pages":null,"category":"amount","notes":"二倍工资金额命中"}
+{"id":"q09_punitive","query":"惩罚性赔偿","expected_keywords":["惩罚性赔偿","赔偿"],"expected_pages":null,"category":"amount","notes":"惩罚性赔偿命中"}
+{"id":"q10_labor_relation","query":"劳动关系","expected_keywords":["劳动关系"],"expected_pages":null,"category":"fact","notes":"劳动关系存在性"}
+{"id":"q11_employer_liability","query":"用工主体责任","expected_keywords":["用工主体","责任"],"expected_pages":null,"category":"fact","notes":"用工主体责任存在性"}
+{"id":"q12_law_error","query":"适用法律错误","expected_keywords":["适用法律","错误"],"expected_pages":null,"category":"fact","notes":"适用法律是否错误"}
+{"id":"q13_witness_testimony","query":"有没有证人证言","expected_keywords":["证人","证言"],"expected_pages":null,"category":"evidence","allow_no_hit":true,"notes":"证人证言evidence_search；如当前 corpus 不存在该证据则计入 optional_cases_no_hit"}
+{"id":"q14_transfer","query":"转账凭证在哪","expected_keywords":["转账","银行流水","汇款"],"expected_pages":null,"category":"evidence","allow_no_hit":true,"notes":"转账类evidence_search；命中任一同义词；如当前 corpus 不存在则计入 optional_cases_no_hit"}
+{"id":"q15_chat","query":"聊天记录在哪","expected_keywords":["聊天记录","微信","短信"],"expected_pages":null,"category":"evidence","allow_no_hit":true,"notes":"聊天记录evidence_search；如当前 corpus 不存在则计入 optional_cases_no_hit"}
