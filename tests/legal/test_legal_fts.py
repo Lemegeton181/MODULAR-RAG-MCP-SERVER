@@ -87,8 +87,9 @@ def test_search_chunks_chinese_token_match(tmp_path):
     )
     conn.commit()
 
-    # Default unicode61 tokenizer treats the continuous CJK run as one token,
-    # so we match it exactly to verify Chinese text round-trips through FTS5.
+    # The chunks_fts table is created with the trigram tokenizer (with a
+    # unicode61 fallback for older SQLite). Either tokenizer round-trips a
+    # full CJK string back to itself; this asserts the basic Chinese path.
     results = search_chunks(conn, "被告借款五万元", limit=10)
 
     assert len(results) == 1

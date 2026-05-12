@@ -166,19 +166,20 @@ tests/legal/
 
 负责 OCR 抽象。
 
-当前 MVP 不直接接重型 OCR，只定义统一接口：
+当前 MVP 已提供两个 Provider 实现：
 
 ```text
-OCRProvider
+OCRProvider                 抽象基类
+SimpleTextOCRProvider       读取已 OCR 文本文件夹，模拟扫描件 OCR 输出
+RapidOCRProvider            真实调用本地 RapidOCR，输入单张图片，返回 page_text
 ```
 
-第一版实现：
+`RapidOCRProvider` 未安装依赖时会立即抛出带安装提示的 ImportError：
 
 ```text
-SimpleTextOCRProvider
+RapidOCR is not installed. Install it with:
+.venv\Scripts\python.exe -m pip install rapidocr onnxruntime
 ```
-
-它读取已 OCR 好的文本，用来模拟真实 OCR 输出，保证主链路先跑通。
 
 后续再新增：
 
@@ -264,12 +265,17 @@ search_legal_chunks(db_path, query, limit)
 
 ### scripts/legal_ingest.py
 
-CLI 导入入口。
-
-当前 MVP 支持从文本文件夹导入，模拟 OCR 结果：
+CLI 导入入口，支持三种输入模式（互斥）：
 
 ```powershell
+# 1. 已 OCR 文本文件夹（Phase C/D 主路径）
 python scripts/legal_ingest.py --pages-dir test_docs/legal_pages --file-name case.pdf --db data/db/legal.db
+
+# 2. 单张图片真实 OCR（Phase E）
+python scripts/legal_ingest.py --image test_docs/page_001.png --file-name case.pdf --db data/db/legal.db
+
+# 3. 单个 PDF（文本层抽取）
+python scripts/legal_ingest.py --path xxx.pdf --db data/db/legal.db
 ```
 
 目录示例：
@@ -334,6 +340,18 @@ snippet
 ### chunks_fts
 
 SQLite FTS5 虚拟表，用于关键词检索。
+
+优先采用 `tokenize='trigram'`（SQLite ≥ 3.34），可命中 CJK 子串（如
+``借款`` 落到 ``...借款五万元...``）。若运行环境 SQLite 不支持 trigram，
+自动回退到默认的 `unicode61`。
+
+`search_chunks` 检索时：
+
+1. 先走 FTS5 MATCH（phrase 包裹查询），失败或为空时
+2. 回退到对 `chunks JOIN documents` 的 `LIKE '%query%' ESCAPE '\'` 扫描，
+   并在本地基于真实 chunk_text 生成 `<b>...</b>` snippet。
+
+这样 2 字 CJK 查询、短查询、含特殊字符查询都能稳定命中。
 
 | 字段 | 说明 |
 |---|---|
@@ -418,8 +436,8 @@ snippet=...借款...
 | Phase B / B2 - init_legal_db 实现 | [x] | - | 已完成 |
 | Phase B / B3 - chunks_fts 写入 | [x] | 2026-05-11 | 已实现 chunks_fts 写入 |
 | Phase B / B4 - 关键词检索 | [x] | 2026-05-11 | 已实现关键词检索并返回 file_name/page_no/snippet |
-| Phase C / D - 页面文本导入 + 搜索 CLI 最小闭环 | [~] | - | 当前推进 |
-| Phase E - 真实 OCR 接入 | [ ] | - | 待开始 |
+| Phase C / D - 页面文本导入 + 搜索 CLI 最小闭环 | [x] | 2026-05-12 | pages-dir → ingest_pages → search_legal_chunks CLI 已贯通，tests/legal/test_legal_mvp.py 通过 |
+| Phase E - 真实 OCR 接入 | [x] | 2026-05-12 | RapidOCRProvider 接入；scripts/legal_ingest.py 新增 --image；chunks_fts 切换 trigram + LIKE 回退，中文“借款”/英文“loan”检索均通过 |
 | Phase F - 表格和图片证据保存 | [ ] | - | 待开始 |
 | Phase G - 本地 embedding + Hybrid RAG | [ ] | - | 待开始 |
 | Phase H - LLM 带引用回答 + citation check | [ ] | - | 待开始 |
@@ -431,43 +449,18 @@ snippet=...借款...
 
 ## 10. 当前 Claude 执行边界
 
-当前只允许 Claude 实现：
+Phase C/D 与 Phase E 已完成。下一个允许的实现窗口：
 
 ```text
-Phase C / D - 页面文本导入 + 搜索 CLI 最小闭环
+Phase F - 表格和图片证据保存
 ```
 
-允许新增或修改：
+后续阶段未经用户重新授权前，不得提前实现。
 
-```text
-src/legal/ocr.py
-src/legal/chunker.py
-src/legal/legal_ingest.py
-src/legal/legal_search.py
-scripts/legal_ingest.py
-scripts/legal_search.py
-tests/legal/test_legal_mvp.py
-LEGAL_DEV_SPEC.md
-```
+历史窗口（已完成）：
 
-当前实现目标：
-
-```text
-已 OCR 页面文本文件夹
-→ ingest_pages()
-→ SQLite documents/pages/chunks/chunks_fts
-→ search_legal_chunks()
-→ legal_search.py CLI
-→ file_name/page_no/snippet
-```
-
-测试目标：
-
-```powershell
-pytest tests/legal/test_legal_mvp.py -v
-```
-
-测试通过后，才能把 Phase C / D 状态改为 `[x]`。
+* Phase C / D — 页面文本导入 + 搜索 CLI 最小闭环
+* Phase E — 真实轻量 OCR (RapidOCR) 图片导入 + CJK trigram / LIKE 回退检索
 
 ---
 

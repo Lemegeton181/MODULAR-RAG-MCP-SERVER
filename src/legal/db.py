@@ -1,9 +1,27 @@
-﻿from pathlib import Path
+"""SQLite schema initialization for the legal retrieval store.
+
+The ``chunks_fts`` virtual table prefers the FTS5 ``trigram`` tokenizer so
+that CJK substring queries (e.g. ``借款`` against ``张三向李四借款五万元``)
+can hit. If the running SQLite build does not ship the trigram tokenizer
+(SQLite < 3.34), the table is created with the default ``unicode61``
+tokenizer instead; :func:`src.legal.fts_store.search_chunks` then falls back
+to a LIKE-based scan for short / CJK queries.
+"""
+from pathlib import Path
 import sqlite3
 
 
+_FTS_COLUMNS = (
+    "chunk_id UNINDEXED, "
+    "doc_id UNINDEXED, "
+    "file_name UNINDEXED, "
+    "page_no UNINDEXED, "
+    "chunk_text"
+)
+
+
 def init_legal_db(db_path: str | Path) -> None:
-    """Initialize SQLite database for legal document retrieval."""
+    """Initialize SQLite tables for legal document retrieval."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,19 +67,22 @@ def init_legal_db(db_path: str | Path) -> None:
             """
         )
 
-        conn.execute(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
-            USING fts5(
-                chunk_id UNINDEXED,
-                doc_id UNINDEXED,
-                file_name UNINDEXED,
-                page_no UNINDEXED,
-                chunk_text
-            )
-            """
-        )
+        _create_chunks_fts(conn)
 
         conn.commit()
     finally:
         conn.close()
+
+
+def _create_chunks_fts(conn: sqlite3.Connection) -> None:
+    """Create the chunks_fts virtual table, preferring the trigram tokenizer."""
+    try:
+        conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
+            f"USING fts5({_FTS_COLUMNS}, tokenize='trigram')"
+        )
+    except sqlite3.OperationalError:
+        conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
+            f"USING fts5({_FTS_COLUMNS})"
+        )

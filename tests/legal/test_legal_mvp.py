@@ -1,6 +1,6 @@
-"""Phase C/D MVP test: pages-dir -> ingest_pages -> search_legal_chunks.
+"""Phase C/D + E MVP tests for the legal retrieval pipeline.
 
-Covers the full minimal loop required for Phase C/D:
+Covers:
 
     test_docs/legal_pages/*.txt
         -> SimpleTextOCRProvider.extract_pages()
@@ -8,6 +8,9 @@ Covers the full minimal loop required for Phase C/D:
         -> documents / pages / chunks / chunks_fts
         -> search_legal_chunks()
         -> [{file_name, page_no, snippet}, ...]
+
+Plus a Chinese-substring search that exercises the FTS5 trigram path (or
+its LIKE fallback) introduced in Phase E.
 """
 import sqlite3
 
@@ -24,6 +27,18 @@ def _write_pages(pages_dir):
     )
     (pages_dir / "page_002.txt").write_text(
         "Page two discusses the court ruling and interest.",
+        encoding="utf-8",
+    )
+
+
+def _write_chinese_pages(pages_dir):
+    pages_dir.mkdir()
+    (pages_dir / "page_001.txt").write_text(
+        "张三向李四借款50000元，双方约定2023年5月6日还款。",
+        encoding="utf-8",
+    )
+    (pages_dir / "page_002.txt").write_text(
+        "本页为银行转账记录，显示李四向张三转账50000元。",
         encoding="utf-8",
     )
 
@@ -112,3 +127,36 @@ def test_search_legal_chunks_returns_empty_on_no_match(tmp_path):
     ingest_pages(db_path, "case.pdf", pages)
 
     assert search_legal_chunks(db_path, "spaceship", limit=10) == []
+
+
+def test_chinese_substring_query_hits_via_fts5_or_like_fallback(tmp_path):
+    """``--query "借款"`` must hit page 1 of the Chinese sample."""
+    pages_dir = tmp_path / "legal_pages_cn"
+    _write_chinese_pages(pages_dir)
+    pages = SimpleTextOCRProvider().extract_pages(pages_dir)
+
+    db_path = tmp_path / "legal_cn.db"
+    ingest_pages(db_path, "case.pdf", pages)
+
+    hits = search_legal_chunks(db_path, "借款", limit=10)
+    assert len(hits) >= 1
+    top = hits[0]
+    assert top["file_name"] == "case.pdf"
+    assert top["page_no"] == 1
+    assert "借款" in top["snippet"]
+
+
+def test_chinese_longer_query_also_hits(tmp_path):
+    """A >=3 char CJK query should hit via the FTS5 trigram path."""
+    pages_dir = tmp_path / "legal_pages_cn2"
+    _write_chinese_pages(pages_dir)
+    pages = SimpleTextOCRProvider().extract_pages(pages_dir)
+
+    db_path = tmp_path / "legal_cn2.db"
+    ingest_pages(db_path, "case.pdf", pages)
+
+    hits = search_legal_chunks(db_path, "银行转账", limit=10)
+    assert len(hits) >= 1
+    assert hits[0]["file_name"] == "case.pdf"
+    assert hits[0]["page_no"] == 2
+    assert "银行转账" in hits[0]["snippet"]
