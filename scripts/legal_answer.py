@@ -69,6 +69,17 @@ def main() -> int:
         action="store_true",
         help="Persist this turn (query + answer + citations) under --case-id.",
     )
+    parser.add_argument(
+        "--llm",
+        choices=["none", "local"],
+        default="none",
+        help="LLM backend: 'none' (extractive fallback, default) or 'local' (llama.cpp).",
+    )
+    parser.add_argument(
+        "--model-path",
+        default=None,
+        help="Path to a local GGUF model (overrides $LEGAL_LLM_MODEL_PATH).",
+    )
     args = parser.parse_args()
 
     if (args.use_context or args.save_context) and not args.case_id:
@@ -102,10 +113,22 @@ def main() -> int:
             )
             args.mode = "fts"
 
+    llm_client = None
+    if args.llm == "local":
+        from src.legal.local_llm import (  # noqa: WPS433
+            LocalLLMUnavailable,
+            build_local_llm_client,
+        )
+        try:
+            llm_client = build_local_llm_client(args.model_path)
+        except LocalLLMUnavailable as e:
+            print(f"error: local LLM unavailable: {e}", file=sys.stderr)
+            return 2
+
     result = answer_legal_question(
         args.db,
         effective_query,
-        llm_client=None,
+        llm_client=llm_client,
         embedder=embedder,
         mode=args.mode,
         limit=args.limit,
