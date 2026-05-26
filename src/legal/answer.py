@@ -35,6 +35,20 @@ from src.legal.query_understanding import analyze_legal_query
 _HARD_NO_ANSWER = "未在当前材料中找到依据。"
 _MAX_PROMPT_SNIPPET = 400
 
+# Reasoning fallback (Phase I): when a reasoning/evidence query returns
+# zero hits on the verbatim form, retry with a short evidence anchor that
+# actually appears in the query. We never fall back for queries that lack
+# a reasoning trigger — "外星人入侵地球的证据" must stay no_evidence
+# rather than degrading to a search for the bare word "证据".
+_REASONING_TRIGGER_WORDS = (
+    "为什么", "为何", "理由", "原因", "依据",
+    "是否", "能否", "如何证明",
+)
+_REASONING_FALLBACK_KEYWORDS = (
+    "撤销", "裁决", "理由", "适用法律错误", "法律逻辑",
+    "惩罚性赔偿", "事实认定", "劳动关系", "用工主体责任", "赔偿",
+)
+
 
 class LLMClient(Protocol):
     """Minimal protocol any LLM client must satisfy.
@@ -102,6 +116,22 @@ def answer_legal_question(
         mode=effective_mode,
         limit=limit,
     )
+
+    if not hits and _should_reasoning_fallback(query, query_type):
+        for kw in _reasoning_fallback_candidates(query):
+            retry = hybrid_search(
+                db_path,
+                kw,
+                embedder=embedder if effective_mode != "fts" else None,
+                mode=effective_mode,
+                limit=limit,
+            )
+            # Skip pure field-overlay results — the fallback only counts
+            # if it surfaced an actual evidence snippet.
+            retry = [h for h in retry if h.get("source") != "field"]
+            if retry:
+                hits = retry
+                break
 
     if not hits:
         return {
@@ -282,3 +312,27 @@ def _strip_html(text: str) -> str:
     if not text:
         return ""
     return text.replace("<b>", "").replace("</b>", "")
+
+
+def _should_reasoning_fallback(query: str, query_type: str) -> bool:
+    """Only reasoning-style queries get a short-keyword retry.
+
+    We deliberately exclude ``field_lookup`` (already routed) and any
+    query that lacks a reasoning trigger word — otherwise a no-evidence
+    question like 「外星人入侵地球的证据」 would degrade to searching
+    for the bare word 「证据」 and start returning false positives.
+    """
+    if query_type == "field_lookup":
+        return False
+    q = query or ""
+    return any(t in q for t in _REASONING_TRIGGER_WORDS)
+
+
+def _reasoning_fallback_candidates(query: str) -> List[str]:
+    """Pick evidence anchors that actually appear in the user's query.
+
+    Preserves ``_REASONING_FALLBACK_KEYWORDS`` order so the more
+    specific anchors (撤销, 裁决) are tried before generic ones (赔偿).
+    """
+    q = query or ""
+    return [kw for kw in _REASONING_FALLBACK_KEYWORDS if kw in q]
