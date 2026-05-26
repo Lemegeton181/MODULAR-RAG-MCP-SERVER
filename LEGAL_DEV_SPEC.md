@@ -441,8 +441,8 @@ snippet=...借款...
 | Phase F - PDF 页面分析与分流处理 | [x] | 2026-05-12 | 已跑通真实 PDF 页面分析、文本层抽取、中文检索和 page_type 返回 |
 | Phase G - 本地 embedding + Hybrid RAG | [x] | 2026-05-12 | 已完成本地 embedding 入库、semantic search 和 hybrid RRF 检索验证 |
 | Phase H 前置 - 动态法律字段体系 + 文档字段发现 + 字段优先检索 + Golden Set 评测 | [~] | - | 新增 legal_schema (FIELD_DEFS + EVIDENCE_KEYWORDS)、legal_fields 表、field_extractor (regex + keyword) + 案号 normalize、query_understanding (field_lookup/evidence_search/general_search)、hybrid_search 字段优先 overlay；新增 scripts/legal_reindex_fields.py 与 scripts/legal_eval.py + evaluation/legal_golden_queries.jsonl (15 cases，含 allow_no_hit 标记)。真实卷宗实测：reindex 抽出 31 条字段，"案号是什么" 返回 source=field，legal_eval hit@1=0.733 / hit@3=0.800 / keyword_hit_rate=0.800。等本地 pytest 全绿后置 [x] |
-| Phase H - LLM 带引用回答 + citation check | [ ] | - | 待开始 |
-| Phase I - 案件级 context memory | [ ] | - | 待开始 |
+| Phase H - LLM 带引用回答 + citation check | [x] | 2026-05-12 | 已新增 src/legal/answer.py (answer_legal_question + citation_check + extractive fallback + injectable LLMClient protocol) 与 scripts/legal_answer.py CLI；field_extractor 新增 field_quality_score + (doc_id, field_name, field_value) 去重保留最高 confidence；新增 tests/legal/test_legal_answer.py / test_legal_citation_check.py。Phase I 联动收口：问答路由修复（reasoning trigger + 角色字段 → evidence_search）+ answer fallback 按 query_type 路由（reasoning/evidence 不再用「申请人：xxx」作主答案，field 仅作补充 citation） |
+| Phase I - 案件级 context memory | [~] | - | 新增 src/legal/case_context.py（legal_case_context 表 + save/load/resolve_followup_query 最小规则）；scripts/legal_answer.py 新增 --case-id/--use-context/--save-context，输出含 query_type/context_used；新增 tests/legal/test_legal_case_context.py，等本地 pytest 全绿后置 [x] |
 | Phase J - MCP / Agent 工具化 | [ ] | - | 待开始 |
 | Phase K - Windows 一键部署 | [ ] | - | 待开始 |
 
@@ -450,10 +450,10 @@ snippet=...借款...
 
 ## 10. 当前 Claude 执行边界
 
-Phase C/D、Phase E、Phase F、Phase G 已完成。Phase H 前置（动态法律字段体系 + 文档字段发现 + 字段优先检索 + Golden Set 评测）实现已就位，待用户本地 pytest + 真实卷宗召回率基线建立后置 `[x]`。下一个允许的实现窗口：
+Phase C/D、Phase E、Phase F、Phase G 已完成。Phase H 前置（动态法律字段体系 + 文档字段发现 + 字段优先检索 + Golden Set 评测）实现已就位。Phase H 本体（字段质量收口 + LLM 带引用回答 + citation check）实现已就位，等用户本地 pytest 全绿后置 `[x]`。下一个允许的实现窗口：
 
 ```text
-Phase H - LLM 带引用回答 + citation check
+Phase I - 案件级 context memory
 ```
 
 后续阶段未经用户重新授权前，不得提前实现。
@@ -465,6 +465,7 @@ Phase H - LLM 带引用回答 + citation check
 * Phase F — PDF 页面分析与分流处理（text / scanned / mixed / table_like）
 * Phase G — 本地 embedding (SentenceTransformer) + legal_vectors + RRF Hybrid 检索（fts / semantic / hybrid）
 * Phase H 前置 — 动态法律字段体系（FIELD_DEFS + EVIDENCE_KEYWORDS）、文档字段发现 (legal_fields)、字段优先 overlay、Golden Set 评测 (hit@1/hit@3/page_hit_rate/keyword_hit_rate)
+* Phase H — 字段质量收口（field_quality_score 通用评分 + (doc_id, field_name, field_value) 去重保留最高 confidence）+ LLM 带引用回答（answer_legal_question + injectable LLMClient + extractive fallback）+ citation_check（no_evidence / citations 一致性校验）+ CLI scripts/legal_answer.py
 
 ---
 
@@ -479,3 +480,86 @@ Claude 完成 Phase C / D 后，只输出：
 
 用户本地运行 pytest。  
 pytest 通过后，再更新本文件进度表。
+
+---
+
+## 12. Phase H 模块说明（字段质量收口 + 带引用回答）
+
+### src/legal/field_extractor.py — 新增 `field_quality_score`
+
+通用、type-aware、不硬编码具体值。每条 regex 抽出的候选都过这个函数，得到的分数直接落到 `legal_fields.confidence`：
+
+| 字段族 | 强信号 | 评分 |
+|---|---|---|
+| 案号 / 文书编号 | `[X]字（YYYY）N号` 完全匹配 | 0.95 |
+| 裁决/判决/立案/合同日期 | `YYYY年M月D日` 完全匹配 | 0.95 |
+| 金额族（二倍工资 / 赔偿 / 借款 / 涉案） | 以 `元/万元/万/圆` 结尾 | 0.95 |
+| 法院 / 仲裁委 / 检察院 / 公安 | 以官方后缀结尾（人民法院 / 仲裁委员会 / 人民检察院 / 公安局/分局） | 0.92 |
+| 统一社会信用代码 / 身份证号 | 字符集 + 长度 fullmatch | 0.95 |
+| 其他默认字段 | 命中 regex 即为基线 | 0.80 |
+
+通用惩罚：
+
+* **长度过短** —— 低于该族最小长度（案号 6 / 法院 5 / 仲裁委 6 …）直接降到 0.30。
+* **跨字段标签吞噬** —— party / 机构 类字段值内部出现 `XXX:` 标签（如 `张三 被申请人：北京...`）→ ≤ 0.35；**申请事项 / 请求事项等论述型字段不在此惩罚集合**。
+* **句子连接符噪声** —— 出现 ≥2 个 `的/之/由/被/做出/...` 等连接符或动词，乘 0.75。
+* **截断尾** —— 以 `（/(/[/【/、/,/，` 等开括号或分隔符结尾，乘 0.75。
+
+去重：`(doc_id, field_name, field_value)` 三元组同 key 保留最高 confidence，源页 page_no 保留 confidence 较高那行。Field overlay 按 `confidence DESC, page_no ASC` 排序，无任何"某一页优先"硬编码。
+
+### src/legal/answer.py — 新增（Phase H 主入口）
+
+```text
+answer_legal_question(db_path, query, *, llm_client=None,
+                      embedder=None, mode="hybrid", limit=5)
+    → {answer, citations, confidence, no_evidence}
+
+citation_check(result) → result    # 原地校验 + 设置 citation_issues
+build_evidence_prompt(query, hits) → str    # 仅供注入 LLM 时使用
+LLMClient (Protocol)               # 测试用 fake、真实本地 LLM 可替换
+```
+
+行为：
+
+1. 先 `hybrid_search` 取 top-k 证据。无证据 → `answer="未在当前材料中找到依据。"`、`no_evidence=True`、`citations=[]`、`confidence="low"`。
+2. 有证据：
+   * `llm_client=None` → extractive fallback：字段 overlay 命中时返回 `"{field_name}：{field_value}"`，否则返回首条 snippet（剥 `<b>` 标签）。
+   * `llm_client` 提供：构造仅基于证据的 prompt 注入，回答仍由 citations 落地（citations 来自检索层，不依赖 LLM 输出）。
+3. `confidence` = `high`（任一证据来自 field overlay） / `medium`（其它）/ `low`（无证据或 citation 缺失）。
+
+### citation_check
+
+| 规则 | 行为 |
+|---|---|
+| `no_evidence=True` 且有 citations | 标记 `no_evidence_but_has_citations`，confidence 置 low |
+| `no_evidence=False` 且 citations 空 | 标记 `missing_citations`，confidence 置 low |
+| citation 缺 `file_name` / `page_no` / `snippet` | 标记 `citation[i].X_missing`，confidence 置 low |
+
+### scripts/legal_answer.py — CLI
+
+```powershell
+.venv\Scripts\python.exe scripts\legal_answer.py `
+    --query "案号是什么" --db data\db\legal.db --mode hybrid
+```
+
+输出：
+
+```text
+answer=案号：哈劳人仲字（2025）1077号
+citations:
+- file_name=case.pdf page_no=1 source=field snippet=...
+confidence=high
+no_evidence=false
+```
+
+无证据问题：
+
+```text
+answer=未在当前材料中找到依据。
+citations:
+- (none)
+confidence=low
+no_evidence=true
+```
+
+`--mode hybrid` 时若本地没装 sentence-transformers，CLI 自动降级到 `--mode fts`，不报错。

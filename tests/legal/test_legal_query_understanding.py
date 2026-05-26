@@ -84,3 +84,35 @@ def test_doc_catalog_can_add_field_candidates_not_in_base_triggers():
     }
     a = analyze_legal_query("北京公司名称是什么", doc_field_catalog=catalog)
     assert "公司名称" in a["field_candidates"]
+
+
+# ---------------------------------------------------------------------------
+# Phase I — reasoning routing
+# ---------------------------------------------------------------------------
+
+
+def test_why_question_with_party_role_is_not_field_lookup():
+    """「为什么申请人认为裁决应撤销？」 contains the role keyword 申请人
+    but the user is asking about reasoning, not who the applicant is."""
+    a = analyze_legal_query("为什么申请人认为裁决应撤销？")
+    assert a["query_type"] != "field_lookup"
+    assert a["query_type"] in ("evidence_search", "reasoning_search")
+
+
+def test_who_is_applicant_remains_field_lookup():
+    a = analyze_legal_query("申请人是谁")
+    assert a["query_type"] == "field_lookup"
+    assert "申请人" in a["field_candidates"]
+
+
+def test_reasoning_trigger_with_fact_field_keeps_field_lookup():
+    """Fact fields (e.g. 适用法律错误) are NOT downgraded by 是否/为什么 —
+    the answer is still a field, just framed as a yes/no question."""
+    a = analyze_legal_query("适用法律是否错误")
+    assert a["query_type"] == "field_lookup"
+    assert "适用法律错误" in a["field_candidates"]
+
+
+def test_multiple_reasoning_triggers_with_role_field_routes_to_evidence():
+    a = analyze_legal_query("被申请人有哪些理由抗辩？")
+    assert a["query_type"] == "evidence_search"

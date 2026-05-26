@@ -32,6 +32,25 @@ from src.legal.legal_schema import (
 )
 
 
+# Reasoning / why-style triggers. When one of these appears together with a
+# party-role field candidate, the user's true intent is to look for the
+# reasoning / evidence behind a party's claim, not the party's name itself.
+# Fact-field candidates (e.g. "适用法律错误") are NOT affected — those
+# remain field_lookup so 「适用法律是否错误」 keeps working.
+REASONING_TRIGGERS: List[str] = [
+    "为什么", "为何", "原因", "理由", "依据",
+    "哪些理由", "哪些事实", "哪些证据",
+    "是否构成", "是否存在", "如何证明",
+    "是否", "能否",
+]
+
+PARTY_ROLE_CANONICAL_NAMES: set[str] = {
+    "申请人", "被申请人", "原告", "被告", "第三人",
+    "上诉人", "被上诉人", "法定代表人", "委托代理人",
+    "辩护人", "证人",
+}
+
+
 class QueryAnalysis(TypedDict):
     original_query: str
     expanded_terms: List[str]
@@ -124,9 +143,22 @@ def analyze_legal_query(
         kw in q for kw in EVIDENCE_KEYWORDS["testimony"] + ["有没有证人", "是否有证人"]
     )
 
-    if field_candidates and not has_testimony_intent:
+    # Reasoning / why-style override: if the user is clearly asking WHY a
+    # party did X (not WHO the party is), the answer should come from the
+    # evidence layer, not from the legal_fields overlay. Only role fields
+    # trigger this — fact fields like 「适用法律错误」 stay field_lookup
+    # even when the question phrases them as 「适用法律是否错误」.
+    has_reasoning_intent = any(t in q for t in REASONING_TRIGGERS)
+    has_role_field = any(
+        name in PARTY_ROLE_CANONICAL_NAMES for name in field_candidates
+    )
+    force_evidence = has_testimony_intent or (
+        has_reasoning_intent and has_role_field
+    )
+
+    if field_candidates and not force_evidence:
         query_type = "field_lookup"
-    elif has_testimony_intent or evidence_groups:
+    elif force_evidence or evidence_groups:
         query_type = "evidence_search"
         # Make sure the evidence terms themselves are first in expanded.
         for term in evidence_terms:
