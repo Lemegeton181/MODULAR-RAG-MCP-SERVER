@@ -98,11 +98,26 @@ python scripts\legal_answer.py --query "..." --db data\db\legal.db --mode hybrid
 - 不自动下载模型，权重不入仓；
 - 仅依赖本机 SQLite / llama.cpp / sentence-transformers / RapidOCR。
 
+## Agent 工具层 / MCP-ready 接入（Phase K）
+
+工具封装位于 `src/legal/tools.py` + `tool_schemas.py` + `tool_runner.py`，
+框架无关，可直接被 Claude tool use / OpenAI function calling / MCP server / 自研 Agent 调用。
+
+- `legal_search_tool` — Hybrid 检索，返回 top-k 片段（含 page_no）；
+- `legal_answer_tool` — Evidence-based 回答 + citation_check，支持 `llm=local`、`case_id` 最小多轮；
+- `legal_reindex_fields_tool` — 重抽 `legal_fields`；
+- `legal_eval_tool` — 跑 Golden Set，返回 hit@k / page_hit_rate / keyword_hit_rate；
+- `legal_self_check_tool` — 环境自检，PASS/WARN/FAIL 结构化输出。
+
+入口：`from src.legal.tool_runner import run_legal_tool`；演示：
+`python scripts\legal_tool_demo.py --tool answer --query "..." --db data\db\legal.db`。
+详见 `docs/LEGAL_TOOLS.md`。
+
 ## 当前限制
 
 - 单机 SQLite，不适合大规模并发；
 - 暂未做 reranker；
-- 暂无 UI 和 MCP 工具暴露；
+- 暂无 UI；MCP server 入口尚未接通（工具层已就绪）；
 - case_context 仅最小规则改写，不做语义记忆。
 
 ## 下一步 TODO
